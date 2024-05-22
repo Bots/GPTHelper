@@ -1,0 +1,8 @@
+eff_word_net/__pycache__
+.ipynb_checkpoints
+.venv*
+build
+EfficientWord_Net.egg-info
+dist
+.env
+__pycache__
