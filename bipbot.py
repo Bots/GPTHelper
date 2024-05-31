@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import os
 import threading
 import assemblyai as aai
@@ -5,13 +6,17 @@ from eff_word_net.streams import SimpleMicStream
 from eff_word_net.engine import HotwordDetector
 from eff_word_net.audio_processing import Resnet50_Arc_loss
 from eff_word_net import samples_loc
-from openai import OpenAI
 from elevenlabs.client import ElevenLabs
 from elevenlabs import play
+from openai import OpenAI
+
+# Load environment variables
+load_dotenv()
 
 # Initialize ElevenLabs and OpenAI clients
-elevenlabsClient = ElevenLabs()  # Add your ElevenLabs API key here
-openaiClient = OpenAI()  # Add your OpenAI API key here
+elevenlabsClient = ElevenLabs()
+openaiClient = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+aai.settings.api_key = os.getenv('ASSEMBLY_API_KEY')
 
 # Initialize the base model for the hotword detector
 base_model = Resnet50_Arc_loss()
@@ -28,7 +33,7 @@ computer_hw = HotwordDetector(
 # Set up the microphone stream with the specified window lengths
 mic_stream = SimpleMicStream(
     window_length_secs=1.5,
-    sliding_window_secs=0.75
+    sliding_window_secs=1
 )
 
 # Variable to store the latest transcript
@@ -46,7 +51,7 @@ def handle_silence():
     transcriber_active = False  # Update the flag
 
     response = openaiClient.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": latest_transcript}
@@ -103,7 +108,7 @@ def start_hotword_detection():
     global transcriber_active
 
     # Ensure the microphone stream is started
-    if not mic_stream.is_streaming():
+    if not mic_stream.start_stream():
         mic_stream.start_stream()
 
     while True:
