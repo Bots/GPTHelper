@@ -61,12 +61,14 @@ def transcriber_on_close():
     print("Closing session")
 
 transcriber = aai.RealtimeTranscriber(
-    sample_rate = 16000,
+    sample_rate = SAMPLE_RATE,
     on_data = transcriber_on_data,
     on_error = transcriber_on_error,
     on_open = transcriber_on_open,
     on_close = transcriber_on_close,
 )
+
+transcriber.connect()
 
 stream = p.open(
     format = FORMAT,
@@ -91,8 +93,6 @@ while True:
     if(result["match"]):
         print("Wakeword uttered", result["confidence"])
 
-        transcriber.connect()
-
-        transcriber.stream(stream)
+        transcriber.stream(stream.read(int(SAMPLE_RATE * SLIDING_WINDOW_SECS)))
 
         transcriber.close()
