@@ -8,7 +8,6 @@ coloredlogs==15.0.1
 decorator==5.1.1
 distro==1.9.0
 EfficientWord-Net==1.0.2
-elevenlabs==1.2.2
 exceptiongroup==1.2.1
 executing==2.0.1
 flatbuffers==24.3.25

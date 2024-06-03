@@ -1,9 +1,11 @@
 import os
 import threading
-import subprocess
 from dotenv import load_dotenv
 import assemblyai as aai
+import numpy as np
 from openai import OpenAI
+import sounddevice as sd
+from piper.voice import PiperVoice
 from eff_word_net import samples_loc
 from eff_word_net.streams import SimpleMicStream
 from eff_word_net.engine import HotwordDetector
@@ -20,6 +22,10 @@ aai.settings.api_key = os.getenv("ASSEMBLY_API_KEY")
 aai.settings.polling_interval = 1.0
 base_model = Resnet50_Arc_loss()
 mic_stream = SimpleMicStream(window_length_secs=1.5, sliding_window_secs=3 / 4)
+# voice = PiperVoice.load(
+#     "./voices/en_US-hfc_male-medium.onnx",
+#     config_path="./voices/en_US-hfc_male-medium.onnx.json",
+# )
 
 computer_hw = HotwordDetector(
     hotword="computer",
@@ -30,10 +36,10 @@ computer_hw = HotwordDetector(
 )
 
 # State variables
-hotword_listening = True
-transcribing = False
-state_lock = threading.Lock()
-transcription = ""
+hotword_listening: bool = True
+transcribing: bool = False
+state_lock: threading.Lock = threading.Lock()
+transcription: str = ""
 
 
 def on_open(session_opened: aai.RealtimeSessionOpened):
@@ -73,13 +79,28 @@ def on_close():
                     {"role": "user", "content": transcription},
                 ],
             )
+
             answer = completion.choices[0].message.content
             print(answer)
-            subprocess.run(
-                f"echo {answer} | piper --cuda --model en_US-hfc_male-medium.onnx --output-raw | paplay -d=default -p --raw --rate=16000",
-                text=True,
-                shell=True,
+
+            voicedir = "./voices/"  # Where onnx model files are stored on my machine
+            model = voicedir + "en_US-hfc_male-medium.onnx"
+            voice = PiperVoice.load(model)
+
+            # Setup a sounddevice OutputStream with appropriate parameters
+            # The sample rate and channels should match the properties of the PCM data
+            stream = sd.OutputStream(
+                samplerate=voice.config.sample_rate, channels=1, dtype="int16"
             )
+            stream.start()
+
+            for audio_bytes in voice.synthesize_stream_raw(answer):
+                int_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                stream.write(int_data)
+
+            stream.stop()
+            stream.close()
+
         except Exception as e:
             print(e)
         with state_lock:
@@ -103,26 +124,23 @@ transcriber = aai.RealtimeTranscriber(
 
 def transcribe():
     global hotword_listening, transcribing, state_lock, transcriber
+    if transcribing:
+        return
     with state_lock:
-        if transcribing:
-            return
-        transcribing = True
         hotword_listening = False
+    transcribing = True
     print("Transcribing...")
     transcriber.connect()
     transcriber.stream(aai.extras.MicrophoneStream(sample_rate=SAMPLE_RATE))
-    with state_lock:
-        transcribing = False
-        hotword_listening = True
     transcriber.close()
+    transcribing = False
 
 
 def detect_hotword():
     global hotword_listening, transcribing, state_lock
     while True:
-        with state_lock:
-            if not hotword_listening or transcribing:
-                continue
+        if not hotword_listening or transcribing:
+            continue
         mic_stream._open_stream()
         frame = mic_stream.getFrame()
         result = computer_hw.scoreFrame(frame)
@@ -130,9 +148,8 @@ def detect_hotword():
             continue
         print("Wakeword uttered", result["confidence"])
         mic_stream.close_stream()
-        with state_lock:
-            if not transcribing:
-                transcribe()
+        if not transcribing:
+            transcribe()
 
 
 # Start hotword detection in a separate thread
