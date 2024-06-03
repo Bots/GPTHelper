@@ -22,10 +22,6 @@ aai.settings.api_key = os.getenv("ASSEMBLY_API_KEY")
 aai.settings.polling_interval = 1.0
 base_model = Resnet50_Arc_loss()
 mic_stream = SimpleMicStream(window_length_secs=1.5, sliding_window_secs=3 / 4)
-# voice = PiperVoice.load(
-#     "./voices/en_US-hfc_male-medium.onnx",
-#     config_path="./voices/en_US-hfc_male-medium.onnx.json",
-# )
 
 computer_hw = HotwordDetector(
     hotword="computer",
@@ -90,7 +86,7 @@ def on_close():
             # Setup a sounddevice OutputStream with appropriate parameters
             # The sample rate and channels should match the properties of the PCM data
             stream = sd.OutputStream(
-                samplerate=voice.config.sample_rate, channels=1, dtype="int16"
+                samplerate=SAMPLE_RATE, channels=1, dtype="int16"
             )
             stream.start()
 
