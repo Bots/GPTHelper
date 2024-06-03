@@ -1,3 +1,4 @@
 .env
 .venv
 __pycache__
+en_US-hfc_male-medium.onnx
