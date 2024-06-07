@@ -1,7 +1,7 @@
+from dotenv import load_dotenv
 import os
 import torch
 import threading
-from dotenv import load_dotenv
 import assemblyai as aai
 import numpy as np
 import sounddevice as sd
@@ -15,7 +15,16 @@ from eff_word_net.engine import HotwordDetector
 from eff_word_net.audio_processing import Resnet50_Arc_loss
 import logging
 
-# Configure colorized logging configuration
+# Load environment variables from the .env file for API access
+load_dotenv()
+
+
+# Define a start time so that we can determine latency throughout
+start_time = datetime.now()
+print("APP START", start_time)
+
+
+# Configure the color logger
 formatter = ColoredFormatter(
     "%(log_color)s%(asctime)s [%(levelname)s] %(message)s%(reset)s",
     datefmt=None,
@@ -31,11 +40,9 @@ formatter = ColoredFormatter(
     style='%'
 )
 
-# Create a StreamHandler and set the formatter
+# More loggery and haberdashery
 handler = logging.StreamHandler()
 handler.setFormatter(formatter)
-
-# Get the root logger and add the handler to it
 logger = logging.getLogger()
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
@@ -43,76 +50,89 @@ logger.setLevel(logging.INFO)
 # Check if CUDA is available for PyTorch and log the status
 logger.info(f"CUDA enabled: {torch.cuda.is_available()}")
 
-# Load environment variables from the .env file for API access
-load_dotenv()
-
 # Set the AssemblyAI API key from environment variables
 aai.settings.api_key = os.getenv('ASSEMBLY_API_KEY')
-aai.settings.polling_interval = 1.0  # Interval in seconds for polling transcription status
+# Interval in seconds for polling transcription status
+# aai.settings.polling_interval = 1.0
 
 # Initialize the OpenAI client
-client = OpenAI()
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Global variables to keep track of the last time we received a transcript and if the program should terminate
-last_transcript_received = datetime.now()
 base_model = Resnet50_Arc_loss()
 transcript_queue = Queue()
 terminated = False
 
-# Listen for a specific hotword using an audio stream
+
 def listen_for_hotword(hotword_detector: HotwordDetector, hotword_mic_stream: SimpleMicStream):
-    
+    """
+    Listen for a specific hotword using an audio stream with a 'sliding window.'
+    """
+
     # Start the microphone stream for hotword detection
-    hotword_mic_stream.start_stream()
-    logger.info("Listening for hotword...")
+    hotwordMetrics1 = datetime.now()
+    logger.error("Hotword detection start", hotwordMetrics1)
+    logger.critical({hotwordMetrics1 - start_time})
 
     try:
         while True:
             # Capture a single frame from the audio stream
             frame = hotword_mic_stream.getFrame()
-            
-            if frame is not None: 
+
+            # Log shape of the array captured from the audio stream (debug)
+            if frame is not None:
                 logger.debug(f"Frame captured with shape: {frame.shape}")
-                
-            # Send the captured frame to the hotword detector and log the result
+
+            # Send the captured frame to the hotword detector for analysis
             result = hotword_detector.scoreFrame(frame)
             logger.debug(f"Hotword detection result: {result}")
-            
+
+            # Check if the hotword was detected and return True if so
             if result is not None and result['match']:
                 logger.info(f"Hotword detected: {result}")
                 return True  # Hotword detected, proceed with speech recognition
             elif frame is None:
-                logger.warning("No frame captured; microphone might not be working.")
+                logger.warning(
+                    "No frame captured; Check sound settings")
     finally:
-        # Always ensure the stream is closed when done
-        hotword_mic_stream.close_stream()
+        # Ensure the stream is closed
+        hotword_mic_stream.close()
+        hotwordMetrics2 = datetime.now()
+        logger.error("Hotword detection end", hotwordMetrics2)
+        logger.critical({hotwordMetrics2 - start_time})
 
-# Function to handle the transcription process in a separate thread
+
 def handle_transcription(transcriber: aai.RealtimeTranscriber, transcribe_event: threading.Event, stop_transcription_event: threading.Event, transcript_queue: Queue):
-    logger.info("Transcription handler thread started.")
-    
+    """
+    Handle the transcription process in a separate thread.
+    """
+    # Start transcription
+    transcriptionMetrics1 = datetime.now()
+    logger.error("Transcription start", transcriptionMetrics1)
+    logger.critical({transcriptionMetrics1 - start_time})
+
     # Placeholder for MicrophoneStream instance to be used in the try block below
     transcriber_mic_stream = None
-    
+
     while not stop_transcription_event.is_set():  # Run until stop signal is received
         transcribe_event.wait()  # Wait for the event that signals transcription should start
         transcribe_event.clear()  # Clear the event after it has been set
-        logger.info("Starting transcription process...")
-        
+
         try:
             # Initialize the MicrophoneStream for AssemblyAI transcription
-            transcriber_mic_stream = aai.extras.MicrophoneStream(sample_rate=16000)
-            logger.info("Microphone stream set up for transcription.")
-            
+            transcriber_mic_stream = aai.extras.MicrophoneStream(
+                sample_rate=16000)
+            logger.info("Microphone open.")
+
             # Start streaming audio from the microphone to the transcriber
             transcriber.stream(transcriber_mic_stream)
             logger.info("Streaming audio to AssemblyAI's transcriber.")
-            
+
             # Loop until a stop signal is received
             while not stop_transcription_event.is_set():
                 try:
                     # Retrieve a transcript from the queue with a timeout of 1 second
-                    transcript = transcript_queue.get(timeout=1)
+                    transcript = transcript_queue.get(timeout=2)
                     if transcript:
                         logger.info(f"Final transcript received: {transcript}")
                         break
@@ -120,36 +140,44 @@ def handle_transcription(transcriber: aai.RealtimeTranscriber, transcribe_event:
                     # If the queue is empty, continue checking until a transcript is available
                     continue
         except Exception as e:
-            logger.error(f"An error occurred during the transcription process: {e}")
+            logger.error(
+                f"An error occurred during the transcription process: {e}")
         finally:
             # Clean up by closing the microphone stream and transcriber connection
             if transcriber_mic_stream:
                 transcriber_mic_stream.close()
             transcriber.close()
-    
-    logger.info("Transcription handler thread stopped.")
+            # Stop transcription
+            transcriptionMetrics2 = datetime.now()
+            logger.error("Transcription end", transcriptionMetrics2)
+            logger.critical({transcriptionMetrics2 - start_time})
 
-# Callback used to handle real-time transcript data received from AssemblyAI
+    logger.info("Transcription thread stopped.")
+
+
 def on_data(transcript: aai.RealtimeTranscript):
-    logger.debug("Connection established")
+    """
+    Callback used to handle real-time transcript data received from AssemblyAI.
+    """
+
+    onDataMetric1 = datetime.now()
+    logger.error("onData start", onDataMetric1)
+    logger.critical(onDataMetric1 - start_time)
     global last_transcript_received
     global terminated
-    
+
     # Log the processed transcript data and handle termination if needed
     if terminated:
         return
-    
-    # Handle a scenario where there's no transcript data (i.e., silence)
+
+    # Handle silence
     if transcript.text == "":
-        delay_since_last = (datetime.now() - last_transcript_received).total_seconds()
-        logger.debug(f"Silence detected for {delay_since_last}s")
-        
-        if delay_since_last > 10:
-            logger.info("Extended silence detected; stopping transcription.")
+        print("Silence detected", end="\r")
+        if (datetime.now() - start_time) > 5:
+            logger.info("5 seconds silence detected; stopping transcription.")
             terminate_transcription()
-        
         return
-    
+
     # Log and save the final transcript when received
     if isinstance(transcript, aai.RealtimeFinalTranscript):
         logger.info(f"User said: {transcript.text}")
@@ -157,34 +185,58 @@ def on_data(transcript: aai.RealtimeTranscript):
     else:
         # For partial transcripts, just display them without logger for brevity
         print(transcript.text, end="\r")
-    
-    # Record the time of the last received transcript
-    last_transcript_received = datetime.now()
 
-# Callback used to handle errors during real-time transcription
+    # Start transcription
+    onDataMetric2 = datetime.now()
+    logger.error("onData end", onDataMetric2)
+    logger.critical({onDataMetric2 - start_time})
+
+
 def on_error(error: aai.RealtimeError):
+    """
+    Callback used to handle errors during real-time transcription. Connection is closed.
+    """
+
     logger.error(f"An error occurred during real-time transcription: {error}")
 
-# Callback for when the transcription session is closed
+
 def on_close():
+    """
+    Callback for when the transcription session is closed without errors.
+    """
+
+    connectionClosedMetric = datetime.now()
+    logger.critical(connectionClosedMetric)
     global terminated
     if not terminated:
         logger.info("Transcription session closed.")
         terminated = True
 
-# Function to gracefully terminate the transcription process
+
 def terminate_transcription():
-    global terminated
+    """
+    Gracefully terminate the transcription process.
+    """
+
+    terminateMetric1 = datetime.now()
+    global terminated, transcriber
     if not terminated:
         logger.info("Terminating transcription...")
         transcriber.close()
         terminated = True
+        terminateMetric2 = datetime.now()
+        logger.critical(terminateMetric2)
 
-# Function to send a transcript to ChatGPT for processing and obtain a response
-def process_with_chatgpt(transcript_result):
-    start_time = datetime.now()
-    logger.info("Sending user transcript to ChatGPT...")
-    
+
+def process_with_chatgpt(transcript_result: str):
+    """
+    Send a transcript to ChatGPT for processing and obtain a response.
+    """
+
+    gptMetric1 = datetime.now()
+    logger.error("GPT start", gptMetric1)
+    logger.critical({gptMetric1 - start_time})
+
     # Use the OpenAI client to interact with ChatGPT using the provided transcript
     response = client.chat.completions.create(
         messages=[
@@ -193,103 +245,126 @@ def process_with_chatgpt(transcript_result):
         ],
         model='gpt-4o',
     )
-    
-    response_duration = (datetime.now() - start_time).total_seconds()
-    logger.info(f"ChatGPT responded in {response_duration:.2f} seconds.")
-    
+    transcript_result = ""
+    gptMetric2 = datetime.now()
+    logger.error("Gpt transcription end", gptMetric2)
+    logger.critical({gptMetric2 - start_time})
+
     # Extract and log the response content
     final_response = response.choices[0].message.content
     logger.info(f"ChatGPT's response: {final_response}")
+    gptMetric3 = datetime.now()
+    logger.error("GPT end", gptMetric3)
+    logger.critical({gptMetric3 - start_time})
     return final_response
 
-# Function to convert the ChatGPT response text to speech and play it
+
 def text_to_speech(text):
-    start_time = datetime.now()
-    logger.info("Converting ChatGPT response to speech...")
-    
+    """
+    Convert the ChatGPT response text to speech and play it.
+    """
+
+    ttsMetric1 = datetime.now()
+    logger.error("TTS start", ttsMetric1)
+    logger.critical({ttsMetric1 - start_time})
+
     # Directory where the TTS model files are stored
-    voicedir = "./voices/"
-    tts_model_path = os.path.join(voicedir, "en_US-arctic-medium.onnx")
-    voice = PiperVoice.load(tts_model_path, use_cuda=True)
-    
+    voice = PiperVoice.load("voices/en_US-arctic-medium.onnx", use_cuda=True)
+
     # Set up the output audio stream for speech playback
-    stream = sd.OutputStream(samplerate=24_000, channels=1, dtype="int16")
-    stream.start()
-    
+    sd.start()
+
     # Synthesize and play the speech audio
     for audio_bytes in voice.synthesize_stream_raw(text):
         int_data = np.frombuffer(audio_bytes, dtype=np.int16)
-        stream.write(int_data)
-    
+        metric2 = datetime.now()
+        logger.critical(metric2)
+        sd.write(int_data)
+
     # Close the audio stream once speech playback is complete
-    stream.stop()
-    stream.close()
-    
-    stream_duration = (datetime.now() - start_time).total_seconds()
-    logger.info(f"Finished speech playback in {stream_duration:.2f} seconds.")
+    sd.stop()
+    sd.close()
+    ttsMetric2 = datetime.now()
+    logger.error("TTS end", ttsMetric2)
+    logger.critical({ttsMetric2 - start_time})
 
-# Initialize the main service components for transcription and hotword detection
-transcriber = aai.RealtimeTranscriber(
-    on_data=on_data, on_error=on_error, on_close=on_close, sample_rate=16000
-)
-hot_word_detector = HotwordDetector(
-    model=base_model, 
-    hotword="jippety", 
-    relaxation_time=1,
-    verbose=True, 
-    threshold=0.6, 
-    continuous=False, 
-    reference_file="voices/jippety_ref.json"
-)
-transcriber.connect()
 
-# Initialize threading events to control transcription
-transcribe_event = threading.Event()
-stop_transcription_event = threading.Event()
-
-# Create and start a thread for handling transcription in the background
-transcription_thread = threading.Thread(
-    target=handle_transcription,
-    args=(transcriber, transcribe_event, stop_transcription_event, transcript_queue)
-)
-transcription_thread.start()
-
-# Main loop where the application waits for the hotword and processes speech
 def main():
-    # Create an instance for hotword audio streaming
-    hotword_mic_stream = SimpleMicStream(window_length_secs=1.5, sliding_window_secs=0.5)
-    
-    while True:
-        if listen_for_hotword(hot_word_detector, hotword_mic_stream):
-            # Trigger the event to start transcription when the hotword is detected
-            transcribe_event.set()
-            
-            try:
-                # Wait for the transcription to be available in the queue
-                transcript = transcript_queue.get(timeout=60)
-                logger.info(f"Received transcript for processing: {transcript}")
-            except Empty:
-                logger.warning("No transcript received within the timeout period.")
-                continue
-            
-            # Signal the transcription thread to stop transcribing
-            stop_transcription_event.set()
-            
-            # Process the transcript using ChatGPT
-            chatgpt_response = process_with_chatgpt(transcript)
-            
-            # Use TTS to speak out the ChatGPT response
-            text_to_speech(chatgpt_response)
-            
-            # Prepare for the next cycle by resetting the event flags
-            stop_transcription_event.clear()
+    """
+    Main function to run the application
+    """
 
-# Run the main loop if this script is executed as the 'main' module.
-if __name__ == "__main__":
+    # Take start time for stream durations
+    mainMetric1 = datetime.now()
+    logger.error("Main function start", mainMetric1)
+    logger.critical({mainMetric1 - start_time})
+
+    # Initialize hotword detector and microphone stream
+    hotword_detector = HotwordDetector(
+        hotword="jippety", model=base_model, reference_file="voices/jippety_ref.json", continuous=False)
+    hotword_mic_stream = SimpleMicStream(
+        window_length_secs=1.5, sliding_window_secs=.5)
+
+    # Initialize AssemblyAI real-time transcriber
+    transcriber = aai.RealtimeTranscriber(
+        sample_rate=16000, on_data=on_data, on_error=on_error, on_close=on_close)
+
+    # Event objects for coordinating the transcription process
+    transcribe_event = threading.Event()
+    stop_transcription_event = threading.Event()
+
+    # Start a thread for handling transcription
+    transcription_thread = threading.Thread(target=handle_transcription,
+                                            args=(transcriber,
+                                                  transcribe_event,
+                                                  stop_transcription_event,
+                                                  transcript_queue))
+    transcription_thread.start()
+
+    # Main application loop
     try:
-        main()
-    finally:
-        # Signal and wait for the transcription thread to finish before exiting
-        stop_transcription_event.set()
-        transcription_thread.join()
-        logger.info("Application exited gracefully.")
+        while True:
+            """
+            Main application loop
+            """
+
+            mainLoopMetric1 = datetime.now()
+            logger.error("Main loop start", mainLoopMetric1)
+            logger.critical({mainLoopMetric1 - start_time})
+            # Listen for the hotword
+            if listen_for_hotword(hotword_detector, hotword_mic_stream):
+                # Hotword detected, signal to start transcription
+                transcribe_event.set()
+
+                # Wait until a final transcript is available
+                while not transcript_queue.empty():
+                    try:
+                        # Get transcript result from the queue
+                        transcript_result = transcript_queue.get_nowait()
+
+                        # Process the transcript with ChatGPT
+                        chatgpt_response = process_with_chatgpt(
+                            transcript_result)
+
+                        # Read response aloud
+                        text_to_speech(chatgpt_response)
+                    except Empty:
+                        # If the queue is empty, break the loop and go back to hotword detection
+                        logger.info(
+                            "No transcript available Back to hotword detection")
+                        break
+    except KeyboardInterrupt:
+        mainLoopMetric2 = datetime.now()
+        logger.critical("Main loop done, app terminating", mainLoopMetric2)
+        logger.info("Application terminating...")
+
+    # Signal to stop the transcription process
+    stop_transcription_event.set()
+    transcription_thread.join()  # Wait for the transcription thread to finish
+
+    # Ensure a complete cleanup
+    terminate_transcription()
+
+
+if __name__ == "__main__":
+    main()
